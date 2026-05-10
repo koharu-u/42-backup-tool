@@ -10,12 +10,14 @@
 #include <unistd.h>
 
 #define BUF_SIZE 4096
+#define CMD_BUF_SIZE (BUF_SIZE * 2)
 #define MENU_ITEMS 4
 #define NO_CHANGES_TOKEN "__NO_CHANGES__"
 #define CONFIRM_WIN_HEIGHT 7
 #define CONFIRM_WIN_MARGIN_X 4
 #define CONFIRM_WIN_OFFSET_Y 9
 #define CONFIRM_WIN_OFFSET_X 2
+#define RSYNC_OPTS "-avzh --delete --exclude='.git'"
 
 typedef struct {
     char local_dir[PATH_MAX];
@@ -78,7 +80,7 @@ static void normalize_path(char *path) {
 static void set_default_config(config_t *cfg) {
     const char *home = getenv("HOME");
     if (home == NULL) {
-        home = "";
+        home = ".";
     }
 
     snprintf(cfg->local_dir, sizeof(cfg->local_dir), "%s/Documents/42bangkok", home);
@@ -109,7 +111,7 @@ static void load_config(config_t *cfg) {
     } else {
         const char *home = getenv("HOME");
         if (home == NULL) {
-            home = "";
+            home = ".";
         }
         snprintf(path, sizeof(path), "%s/.config/42-backup-tool.conf", home);
     }
@@ -198,7 +200,7 @@ static int handle_backup_target(const config_t *cfg, const char *target_dir, con
         return 1;
     }
 
-    char cmd[BUF_SIZE * 2];
+    char cmd[CMD_BUF_SIZE];
     char out[BUF_SIZE];
 
     snprintf(cmd, sizeof(cmd), "cd %s && git pull origin %s --quiet 2>&1", q_target, q_branch);
@@ -207,7 +209,7 @@ static int handle_backup_target(const config_t *cfg, const char *target_dir, con
         return 1;
     }
 
-    snprintf(cmd, sizeof(cmd), "rsync -avzh --delete --exclude='.git' %s/ %s/ 2>&1", q_local, q_target);
+    snprintf(cmd, sizeof(cmd), "rsync " RSYNC_OPTS " %s/ %s/ 2>&1", q_local, q_target);
     if (run_command(cmd, out, sizeof(out)) != 0) {
         snprintf(msg, msg_size, "%s: rsync failed\n%s", name, out);
         return 1;
@@ -269,7 +271,7 @@ static int run_restore(const config_t *cfg, char *msg, size_t msg_size) {
         return 1;
     }
 
-    char cmd[BUF_SIZE * 2];
+    char cmd[CMD_BUF_SIZE];
     char out[BUF_SIZE];
 
     snprintf(cmd, sizeof(cmd), "cd %s && git pull origin %s --quiet 2>&1", q_gh, q_branch);
@@ -278,7 +280,7 @@ static int run_restore(const config_t *cfg, char *msg, size_t msg_size) {
         return 1;
     }
 
-    snprintf(cmd, sizeof(cmd), "rsync -avzh --delete --exclude='.git' %s/ %s/ 2>&1", q_gh, q_local);
+    snprintf(cmd, sizeof(cmd), "rsync " RSYNC_OPTS " %s/ %s/ 2>&1", q_gh, q_local);
     if (run_command(cmd, out, sizeof(out)) != 0) {
         snprintf(msg, msg_size, "Restore failed while syncing to local\n%s", out);
         return 1;
@@ -324,6 +326,9 @@ static bool confirm_delete_sync(const char *mode_label) {
     int rows = 0;
     int cols = 0;
     getmaxyx(stdscr, rows, cols);
+    if (rows < CONFIRM_WIN_HEIGHT + 2 || cols < 30) {
+        return false;
+    }
 
     WINDOW *win = newwin(CONFIRM_WIN_HEIGHT, cols - CONFIRM_WIN_MARGIN_X, rows - CONFIRM_WIN_OFFSET_Y, CONFIRM_WIN_OFFSET_X);
     if (win == NULL) {
