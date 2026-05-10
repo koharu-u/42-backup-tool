@@ -11,6 +11,11 @@
 
 #define BUF_SIZE 4096
 #define MENU_ITEMS 4
+#define NO_CHANGES_TOKEN "__NO_CHANGES__"
+#define CONFIRM_WIN_HEIGHT 7
+#define CONFIRM_WIN_MARGIN_X 4
+#define CONFIRM_WIN_OFFSET_Y 9
+#define CONFIRM_WIN_OFFSET_X 2
 
 typedef struct {
     char local_dir[PATH_MAX];
@@ -33,26 +38,41 @@ static void trim(char *s) {
     }
 }
 
-static void shell_quote(const char *src, char *dst, size_t dst_size) {
+static bool shell_quote(const char *src, char *dst, size_t dst_size) {
     size_t j = 0;
-    if (dst_size == 0) {
-        return;
+    if (dst_size < 3) {
+        return false;
     }
     dst[j++] = '\'';
-    for (size_t i = 0; src[i] != '\0' && j + 5 < dst_size; i++) {
+    for (size_t i = 0; src[i] != '\0'; i++) {
         if (src[i] == '\'') {
+            if (j + 4 + 2 > dst_size) {
+                return false;
+            }
             dst[j++] = '\'';
             dst[j++] = '\\';
             dst[j++] = '\'';
             dst[j++] = '\'';
         } else {
+            if (j + 1 + 2 > dst_size) {
+                return false;
+            }
             dst[j++] = src[i];
         }
     }
-    if (j < dst_size - 1) {
-        dst[j++] = '\'';
+    if (j + 2 > dst_size) {
+        return false;
     }
+    dst[j++] = '\'';
     dst[j] = '\0';
+    return true;
+}
+
+static void normalize_path(char *path) {
+    size_t len = strlen(path);
+    while (len > 1 && path[len - 1] == '/') {
+        path[--len] = '\0';
+    }
 }
 
 static void set_default_config(config_t *cfg) {
@@ -165,9 +185,18 @@ static int handle_backup_target(const config_t *cfg, const char *target_dir, con
     char q_local[PATH_MAX * 2];
     char q_target[PATH_MAX * 2];
     char q_branch[128];
-    shell_quote(cfg->local_dir, q_local, sizeof(q_local));
-    shell_quote(target_dir, q_target, sizeof(q_target));
-    shell_quote(cfg->branch, q_branch, sizeof(q_branch));
+    char local_norm[PATH_MAX];
+    char target_norm[PATH_MAX];
+    snprintf(local_norm, sizeof(local_norm), "%s", cfg->local_dir);
+    snprintf(target_norm, sizeof(target_norm), "%s", target_dir);
+    normalize_path(local_norm);
+    normalize_path(target_norm);
+    if (!shell_quote(local_norm, q_local, sizeof(q_local)) ||
+        !shell_quote(target_norm, q_target, sizeof(q_target)) ||
+        !shell_quote(cfg->branch, q_branch, sizeof(q_branch))) {
+        snprintf(msg, msg_size, "%s: path/config value is too long.", name);
+        return 1;
+    }
 
     char cmd[BUF_SIZE * 2];
     char out[BUF_SIZE];
@@ -187,14 +216,14 @@ static int handle_backup_target(const config_t *cfg, const char *target_dir, con
     snprintf(cmd, sizeof(cmd),
              "cd %s && if [ -n \"$(git status --porcelain)\" ]; then "
              "git add . && git commit -m \"Backup: $(date +'%%Y-%%m-%%d %%H:%%M:%%S')\" && git push origin %s; "
-             "else echo '__NO_CHANGES__'; fi 2>&1",
+             "else echo '" NO_CHANGES_TOKEN "'; fi 2>&1",
              q_target, q_branch);
     if (run_command(cmd, out, sizeof(out)) != 0) {
         snprintf(msg, msg_size, "%s: commit/push failed\n%s", name, out);
         return 1;
     }
 
-    if (strstr(out, "__NO_CHANGES__") != NULL) {
+    if (strstr(out, NO_CHANGES_TOKEN) != NULL) {
         snprintf(msg, msg_size, "%s: already in sync (no push needed).", name);
     } else {
         snprintf(msg, msg_size, "%s: files pushed to cloud.", name);
@@ -227,9 +256,18 @@ static int run_restore(const config_t *cfg, char *msg, size_t msg_size) {
     char q_local[PATH_MAX * 2];
     char q_gh[PATH_MAX * 2];
     char q_branch[128];
-    shell_quote(cfg->local_dir, q_local, sizeof(q_local));
-    shell_quote(cfg->gh_dir, q_gh, sizeof(q_gh));
-    shell_quote(cfg->branch, q_branch, sizeof(q_branch));
+    char local_norm[PATH_MAX];
+    char gh_norm[PATH_MAX];
+    snprintf(local_norm, sizeof(local_norm), "%s", cfg->local_dir);
+    snprintf(gh_norm, sizeof(gh_norm), "%s", cfg->gh_dir);
+    normalize_path(local_norm);
+    normalize_path(gh_norm);
+    if (!shell_quote(local_norm, q_local, sizeof(q_local)) ||
+        !shell_quote(gh_norm, q_gh, sizeof(q_gh)) ||
+        !shell_quote(cfg->branch, q_branch, sizeof(q_branch))) {
+        snprintf(msg, msg_size, "Path/config value is too long.");
+        return 1;
+    }
 
     char cmd[BUF_SIZE * 2];
     char out[BUF_SIZE];
@@ -287,7 +325,7 @@ static bool confirm_delete_sync(const char *mode_label) {
     int cols = 0;
     getmaxyx(stdscr, rows, cols);
 
-    WINDOW *win = newwin(7, cols - 4, rows - 9, 2);
+    WINDOW *win = newwin(CONFIRM_WIN_HEIGHT, cols - CONFIRM_WIN_MARGIN_X, rows - CONFIRM_WIN_OFFSET_Y, CONFIRM_WIN_OFFSET_X);
     if (win == NULL) {
         return false;
     }
