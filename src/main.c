@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #define BUF_SIZE 4096
+#define MENU_ITEMS 4
 
 typedef struct {
     char local_dir[PATH_MAX];
@@ -233,7 +234,7 @@ static int run_restore(const config_t *cfg, char *msg, size_t msg_size) {
     char cmd[BUF_SIZE * 2];
     char out[BUF_SIZE];
 
-    snprintf(cmd, sizeof(cmd), "cd %s && git pull origin %s 2>&1", q_gh, q_branch);
+    snprintf(cmd, sizeof(cmd), "cd %s && git pull origin %s --quiet 2>&1", q_gh, q_branch);
     if (run_command(cmd, out, sizeof(out)) != 0) {
         snprintf(msg, msg_size, "Restore failed while pulling GitHub\n%s", out);
         return 1;
@@ -256,7 +257,7 @@ static void draw_ui(const config_t *cfg, int selected, const char *status) {
         "Reload config",
         "Exit",
     };
-    const int count = (int)(sizeof(items) / sizeof(items[0]));
+    const int count = MENU_ITEMS;
 
     clear();
     mvprintw(1, 2, "42 BANGKOK SYNC MANAGER (C + ncurses)");
@@ -281,6 +282,26 @@ static void draw_ui(const config_t *cfg, int selected, const char *status) {
     refresh();
 }
 
+static bool confirm_delete_sync(const char *mode_label) {
+    int rows = 0;
+    int cols = 0;
+    getmaxyx(stdscr, rows, cols);
+
+    WINDOW *win = newwin(7, cols - 4, rows - 9, 2);
+    if (win == NULL) {
+        return false;
+    }
+    box(win, 0, 0);
+    mvwprintw(win, 1, 2, "%s uses rsync --delete.", mode_label);
+    mvwprintw(win, 2, 2, "This can remove files in destination directories.");
+    mvwprintw(win, 4, 2, "Continue? (y/N)");
+    wrefresh(win);
+
+    int ch = wgetch(win);
+    delwin(win);
+    return ch == 'y' || ch == 'Y';
+}
+
 int main(void) {
     config_t cfg;
     load_config(&cfg);
@@ -299,20 +320,28 @@ int main(void) {
         int ch = getch();
         switch (ch) {
             case KEY_UP:
-                selected = (selected + 3) % 4;
+                selected = (selected - 1 + MENU_ITEMS) % MENU_ITEMS;
                 break;
             case KEY_DOWN:
-                selected = (selected + 1) % 4;
+                selected = (selected + 1) % MENU_ITEMS;
                 break;
             case '\n':
             case KEY_ENTER:
                 if (selected == 0) {
+                    if (!confirm_delete_sync("Backup")) {
+                        snprintf(status, sizeof(status), "Backup cancelled.");
+                        break;
+                    }
                     snprintf(status, sizeof(status), "Running backup...");
                     draw_ui(&cfg, selected, status);
                     if (run_backup(&cfg, status, sizeof(status)) == 0) {
                         beep();
                     }
                 } else if (selected == 1) {
+                    if (!confirm_delete_sync("Restore")) {
+                        snprintf(status, sizeof(status), "Restore cancelled.");
+                        break;
+                    }
                     snprintf(status, sizeof(status), "Running restore...");
                     draw_ui(&cfg, selected, status);
                     if (run_restore(&cfg, status, sizeof(status)) == 0) {
